@@ -3,10 +3,42 @@
  * Office Lens-style: Auto-discover existing files in export directories on every app launch
  * and import them into the app's document database
  */
-import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path } from '@nativescript/core';
+import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path, Utils } from '@nativescript/core';
 import { OCRDocument, PageData, getDocumentsService } from '~/models/OCRDocument';
 import { IMAGE_EXPORT_DIRECTORY, PDF_EXPORT_DIRECTORY, IMG_FORMAT, getImageExportSettings } from '~/utils/constants';
 import { getImageSize } from 'plugin-nativeprocessor';
+
+/**
+ * Get the PDF export directory path
+ */
+export function getPdfExportDirectory(): string | null {
+    if (!__ANDROID__) return null;
+    try {
+        const docDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS);
+        if (docDir) {
+            return docDir.getAbsolutePath() + '/DocumentScanner';
+        }
+    } catch (e) {
+        console.log('Error getting PDF directory:', e);
+    }
+    return null;
+}
+
+/**
+ * Get the Image export directory path
+ */
+export function getImageExportDirectory(): string | null {
+    if (!__ANDROID__) return null;
+    try {
+        const picDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES);
+        if (picDir) {
+            return picDir.getAbsolutePath() + '/DocumentScanner';
+        }
+    } catch (e) {
+        console.log('Error getting Image directory:', e);
+    }
+    return null;
+}
 
 /**
  * Ensures export directories exist
@@ -15,21 +47,29 @@ export async function ensureExportDirectories(): Promise<void> {
     if (!__ANDROID__) return;
 
     try {
+        const pdfDir = getPdfExportDirectory();
+        const imageDir = getImageExportDirectory();
+        
+        console.log('ensureExportDirectories - PDF:', pdfDir);
+        console.log('ensureExportDirectories - Image:', imageDir);
+
         // Create PDF export directory
-        if (PDF_EXPORT_DIRECTORY) {
-            if (!File.exists(PDF_EXPORT_DIRECTORY)) {
-                const pdfFolder = Folder.fromPath(PDF_EXPORT_DIRECTORY);
-                await pdfFolder.create();
-                console.log('Created PDF export directory:', PDF_EXPORT_DIRECTORY);
+        if (pdfDir) {
+            try {
+                const pdfFolder = Folder.fromPath(pdfDir);
+                console.log('PDF folder path:', pdfFolder.path);
+            } catch (e) {
+                console.log('PDF folder does not exist, creating...');
             }
         }
 
         // Create Image export directory
-        if (IMAGE_EXPORT_DIRECTORY) {
-            if (!File.exists(IMAGE_EXPORT_DIRECTORY)) {
-                const imageFolder = Folder.fromPath(IMAGE_EXPORT_DIRECTORY);
-                await imageFolder.create();
-                console.log('Created Image export directory:', IMAGE_EXPORT_DIRECTORY);
+        if (imageDir) {
+            try {
+                const imageFolder = Folder.fromPath(imageDir);
+                console.log('Image folder path:', imageFolder.path);
+            } catch (e) {
+                console.log('Image folder does not exist, creating...');
             }
         }
     } catch (error) {
@@ -38,20 +78,18 @@ export async function ensureExportDirectories(): Promise<void> {
 }
 
 /**
- * Check if a file has already been imported (by checking if document exists with same source path)
+ * Check if a file has already been imported
  */
 async function isFileAlreadyImported(filePath: string): Promise<boolean> {
     try {
         const documentsService = getDocumentsService();
         if (!documentsService) return false;
         
-        // Check all documents to see if any have this file as source
         const docs = await documentsService.documentRepository.search();
         for (const doc of docs) {
             if (doc.extra?.importedPdfPath === filePath) {
                 return true;
             }
-            // Check pages for image imports
             if (doc.pages) {
                 for (const page of doc.pages) {
                     if (page.sourceImagePath === filePath || page.imagePath === filePath) {
@@ -74,7 +112,6 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
     try {
         console.log('Importing image as document:', imagePath);
         
-        // Check if already imported
         if (await isFileAlreadyImported(imagePath)) {
             console.log('Image already imported, skipping:', imagePath);
             return null;
@@ -116,13 +153,11 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
 
 /**
  * Import a PDF file as a new document
- * Note: PDFs are stored as single document references, not converted to images
  */
 async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null> {
     try {
         console.log('Importing PDF as document:', pdfPath);
         
-        // Check if already imported
         if (await isFileAlreadyImported(pdfPath)) {
             console.log('PDF already imported, skipping:', pdfPath);
             return null;
@@ -130,8 +165,6 @@ async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null>
         
         const fileName = pdfPath.split('/').pop() || 'Imported PDF';
         
-        // Create a document that references the PDF
-        // We store the PDF path in extra metadata
         const doc = await OCRDocument.createDocument([], undefined, {
             name: fileName.replace(/\.[^/.]+$/, ''),
             extra: {
@@ -149,8 +182,43 @@ async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null>
 }
 
 /**
+ * List files in a directory using Java File API (more reliable on Android)
+ */
+function listFilesInDirectory(dirPath: string): string[] {
+    const files: string[] = [];
+    try {
+        console.log('Listing files in:', dirPath);
+        const javaFile = new java.io.File(dirPath);
+        
+        if (!javaFile.exists()) {
+            console.log('Directory does not exist:', dirPath);
+            return files;
+        }
+        
+        if (!javaFile.isDirectory()) {
+            console.log('Path is not a directory:', dirPath);
+            return files;
+        }
+        
+        const children = javaFile.listFiles();
+        if (children) {
+            for (let i = 0; i < children.length; i++) {
+                const child = children[i];
+                if (child.isFile()) {
+                    files.push(child.getAbsolutePath());
+                    console.log('Found file:', child.getAbsolutePath());
+                }
+            }
+        }
+        console.log('Total files found:', files.length);
+    } catch (e) {
+        console.error('Error listing directory:', dirPath, e);
+    }
+    return files;
+}
+
+/**
  * Discover existing files in export directories and import them into the app
- * This is called on every app launch to populate the document list
  */
 export async function discoverExistingFiles(): Promise<number> {
     if (!__ANDROID__) {
@@ -158,73 +226,58 @@ export async function discoverExistingFiles(): Promise<number> {
         return 0;
     }
 
-    console.log('Starting file discovery...');
-    console.log('PDF_EXPORT_DIRECTORY:', PDF_EXPORT_DIRECTORY);
-    console.log('IMAGE_EXPORT_DIRECTORY:', IMAGE_EXPORT_DIRECTORY);
-    
+    console.log('=== Starting file discovery ===');
     let importedCount = 0;
 
     try {
-        await ensureExportDirectories();
+        // Get directory paths
+        const pdfDir = getPdfExportDirectory();
+        const imageDir = getImageExportDirectory();
+        
+        console.log('PDF directory:', pdfDir);
+        console.log('Image directory:', imageDir);
 
-        // Import images from Pictures/DocumentScanner
-        if (IMAGE_EXPORT_DIRECTORY) {
-            console.log('Checking image directory:', IMAGE_EXPORT_DIRECTORY);
-            if (File.exists(IMAGE_EXPORT_DIRECTORY)) {
-                console.log('Image directory exists');
-                try {
-                    const imageFolder = Folder.fromPath(IMAGE_EXPORT_DIRECTORY);
-                    const entities = imageFolder.getEntitiesSync();
-                    console.log('Found', entities.length, 'items in image directory');
-                    
-                    for (const entity of entities) {
-                        if (entity.isFile) {
-                            const ext = entity.name.toLowerCase();
-                            if (ext.endsWith('.jpg') || ext.endsWith('.jpeg') || ext.endsWith('.png') || ext.endsWith('.webp')) {
-                                console.log('Found image to import:', entity.path);
-                                const doc = await importImageAsDocument(entity.path);
-                                if (doc) {
-                                    importedCount++;
-                                }
-                            }
-                        }
+        // Check storage permissions
+        const context = Utils.android.getApplicationContext();
+        if (__ANDROID__ && android.os.Build.VERSION.SDK_INT >= 30) {
+            // Android 11+ needs MANAGE_EXTERNAL_STORAGE for broad access
+            console.log('Android 11+ - checking storage permissions');
+        }
+
+        // Process PDFs
+        if (pdfDir) {
+            console.log('--- Scanning PDF directory ---');
+            const pdfFiles = listFilesInDirectory(pdfDir);
+            
+            for (const pdfPath of pdfFiles) {
+                if (pdfPath.toLowerCase().endsWith('.pdf')) {
+                    console.log('Processing PDF:', pdfPath);
+                    const doc = await importPdfAsDocument(pdfPath);
+                    if (doc) {
+                        importedCount++;
                     }
-                } catch (e) {
-                    console.log('Error scanning image directory:', e);
                 }
-            } else {
-                console.log('Image directory does not exist');
             }
         }
 
-        // Import PDFs from Documents/DocumentScanner
-        if (PDF_EXPORT_DIRECTORY) {
-            console.log('Checking PDF directory:', PDF_EXPORT_DIRECTORY);
-            if (File.exists(PDF_EXPORT_DIRECTORY)) {
-                console.log('PDF directory exists');
-                try {
-                    const pdfFolder = Folder.fromPath(PDF_EXPORT_DIRECTORY);
-                    const entities = pdfFolder.getEntitiesSync();
-                    console.log('Found', entities.length, 'items in PDF directory');
-                    
-                    for (const entity of entities) {
-                        if (entity.isFile && entity.name.toLowerCase().endsWith('.pdf')) {
-                            console.log('Found PDF to import:', entity.path);
-                            const doc = await importPdfAsDocument(entity.path);
-                            if (doc) {
-                                importedCount++;
-                            }
-                        }
+        // Process Images
+        if (imageDir) {
+            console.log('--- Scanning Image directory ---');
+            const imageFiles = listFilesInDirectory(imageDir);
+            
+            for (const imagePath of imageFiles) {
+                const ext = imagePath.toLowerCase();
+                if (ext.endsWith('.jpg') || ext.endsWith('.jpeg') || ext.endsWith('.png') || ext.endsWith('.webp')) {
+                    console.log('Processing Image:', imagePath);
+                    const doc = await importImageAsDocument(imagePath);
+                    if (doc) {
+                        importedCount++;
                     }
-                } catch (e) {
-                    console.log('Error scanning PDF directory:', e);
                 }
-            } else {
-                console.log('PDF directory does not exist');
             }
         }
 
-        console.log('File discovery complete. Imported', importedCount, 'files.');
+        console.log('=== File discovery complete. Imported:', importedCount, 'files ===');
         
     } catch (error) {
         console.error('Error during file discovery:', error);
