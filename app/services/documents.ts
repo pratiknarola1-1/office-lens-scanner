@@ -546,19 +546,27 @@ export class DocumentRepository extends BaseRepository<OCRDocument, Document> {
     };
 
     async createDocument(document: Document) {
+        console.log('[DOCS_REPO] createDocument called with:', JSON.stringify({ id: document.id, name: document.name, extra: document.extra }));
         const { extra, folders, ...others } = document;
         const createdDate = Date.now();
-        const doc = await this.create(
-            cleanUndefined({
-                createdDate,
-                modifiedDate: createdDate,
-                ...others,
-                extra: isObject(extra) ? JSON.stringify(extra) : extra,
-                _synced: 0,
-                pagesOrder: others.pagesOrder ? JSON.stringify(others.pagesOrder) : undefined,
-                nameSearch: normalizeSearchString(others.name)
-            })
-        );
+        const attributes = cleanUndefined({
+            createdDate,
+            modifiedDate: createdDate,
+            ...others,
+            extra: isObject(extra) ? JSON.stringify(extra) : extra,
+            _synced: 0,
+            pagesOrder: others.pagesOrder ? JSON.stringify(others.pagesOrder) : undefined,
+            nameSearch: normalizeSearchString(others.name)
+        });
+        console.log('[DOCS_REPO] createDocument attributes:', JSON.stringify(attributes));
+        
+        const doc = await this.create(attributes);
+        console.log('[DOCS_REPO] createDocument result doc.id:', doc.id);
+        
+        // Verify it was saved
+        const verifyDoc = await this.getById(doc.id);
+        console.log('[DOCS_REPO] Verification - doc exists after create:', !!verifyDoc);
+        
         if (folders) {
             for (let index = 0; index < folders.length; index++) {
                 await doc.setFolder({ folderId: folders[index], notify: false });

@@ -6,7 +6,7 @@
 import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path, Utils, Application } from '@nativescript/core';
 import { OCRDocument, PageData, getDocumentsService } from '~/models/OCRDocument';
 import { IMAGE_EXPORT_DIRECTORY, PDF_EXPORT_DIRECTORY, IMG_FORMAT, getImageExportSettings, PDFImportImages } from '~/utils/constants';
-import { getImageSize, importPdfToTempImages } from 'plugin-nativeprocessor';
+import { getImageSize } from 'plugin-nativeprocessor';
 
 /**
  * Check if we have permission to read external storage
@@ -188,6 +188,88 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
 }
 
 /**
+ * Convert PDF to images using Android PdfRenderer directly
+ * This avoids the "no content provider" issue
+ */
+async function convertPdfToImages(pdfPath: string): Promise<string[]> {
+    if (!__ANDROID__) return [];
+    
+    const images: string[] = [];
+    let fileDescriptor: android.os.ParcelFileDescriptor = null;
+    let renderer: android.graphics.pdf.PdfRenderer = null;
+    
+    try {
+        console.log('[FILE_DISCOVERY] Converting PDF using PdfRenderer:', pdfPath);
+        
+        const javaFile = new java.io.File(pdfPath);
+        if (!javaFile.exists()) {
+            console.error('[FILE_DISCOVERY] PDF file does not exist:', pdfPath);
+            return [];
+        }
+        
+        fileDescriptor = android.os.ParcelFileDescriptor.open(javaFile, android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+        if (!fileDescriptor) {
+            console.error('[FILE_DISCOVERY] Could not open PDF file descriptor');
+            return [];
+        }
+        
+        renderer = new android.graphics.pdf.PdfRenderer(fileDescriptor);
+        const pageCount = renderer.getPageCount();
+        console.log('[FILE_DISCOVERY] PDF has', pageCount, 'pages');
+        
+        for (let i = 0; i < pageCount; i++) {
+            console.log('[FILE_DISCOVERY] Rendering page', i);
+            const page = renderer.openPage(i);
+            
+            // Get page dimensions
+            const width = page.getWidth();
+            const height = page.getHeight();
+            console.log('[FILE_DISCOVERY] Page', i, 'dimensions:', width, 'x', height);
+            
+            // Scale for better quality (2x)
+            const scale = 2;
+            const scaledWidth = width * scale;
+            const scaledHeight = height * scale;
+            
+            // Create bitmap
+            const bitmap = android.graphics.Bitmap.createBitmap(scaledWidth, scaledHeight, android.graphics.Bitmap.Config.ARGB_8888);
+            
+            // Render page to bitmap
+            page.render(bitmap, null, null, android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+            page.close();
+            
+            // Save bitmap to temp file
+            const tempDir = Utils.android.getApplicationContext().getCacheDir();
+            const imageFile = new java.io.File(tempDir, 'pdf_page_' + Date.now() + '_' + i + '.png');
+            const outputStream = new java.io.FileOutputStream(imageFile);
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, outputStream);
+            outputStream.flush();
+            outputStream.close();
+            bitmap.recycle();
+            
+            const imagePath = imageFile.getAbsolutePath();
+            images.push(imagePath);
+            console.log('[FILE_DISCOVERY] Saved page', i, 'to:', imagePath);
+        }
+        
+        console.log('[FILE_DISCOVERY] PDF conversion complete, created', images.length, 'images');
+        
+    } catch (error) {
+        console.error('[FILE_DISCOVERY] PdfRenderer error:', error);
+        console.error('[FILE_DISCOVERY] Error stack:', error?.stack);
+    } finally {
+        if (renderer) {
+            try { renderer.close(); } catch (e) {}
+        }
+        if (fileDescriptor) {
+            try { fileDescriptor.close(); } catch (e) {}
+        }
+    }
+    
+    return images;
+}
+
+/**
  * Import a PDF file as a new document
  */
 async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null> {
@@ -203,23 +285,10 @@ async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null>
         const fileName = pdfPath.split('/').pop() || 'Imported PDF';
         console.log('[FILE_DISCOVERY] File name:', fileName);
         
-        // Convert PDF to images
+        // Convert PDF to images using PdfRenderer
         console.log('[FILE_DISCOVERY] Converting PDF to images...');
-        let pdfImages: string[] = [];
-        try {
-            pdfImages = await importPdfToTempImages(pdfPath, {
-                importPDFImages: true,
-                compressFormat: 'png',
-                compressQuality: 90
-            });
-            console.log('[FILE_DISCOVERY] PDF conversion result:', pdfImages?.length || 0, 'images');
-            if (pdfImages && pdfImages.length > 0) {
-                console.log('[FILE_DISCOVERY] First image path:', pdfImages[0]);
-            }
-        } catch (pdfError) {
-            console.error('[FILE_DISCOVERY] PDF conversion FAILED:', pdfError);
-            console.error('[FILE_DISCOVERY] PDF error stack:', pdfError?.stack);
-        }
+        const pdfImages = await convertPdfToImages(pdfPath);
+        console.log('[FILE_DISCOVERY] PDF conversion result:', pdfImages?.length || 0, 'images');
         
         if (!pdfImages || pdfImages.length === 0) {
             console.log('[FILE_DISCOVERY] No images from PDF, creating reference-only document');
