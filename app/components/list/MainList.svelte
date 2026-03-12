@@ -227,15 +227,21 @@
 
     export async function refresh(force = true, filter?: string) {
         // DEV_LOG && console.log('refresh', force, filter);
+        console.log('[MAINLIST] refresh called, force:', force, 'filter:', filter, 'loading:', loading, 'documentsService.started:', documentsService.started);
         if (loading || (!force && lastRefreshFilter === filter) || !documentsService.started) {
+            console.log('[MAINLIST] refresh skipped');
             return;
         }
         lastRefreshFilter = filter;
         nbSelected = 0;
         loading = true;
         try {
-            DEV_LOG && console.log('MainList', 'refresh', folder, filter, sortOrder);
+            console.log('[MAINLIST] Calling findDocuments with folder:', folder, 'order:', sortOrder);
             const r = await documentsService.documentRepository.findDocuments({ filter, folder, omitThoseWithFolders: true, order: sortOrder });
+            console.log('[MAINLIST] findDocuments returned:', r?.length || 0, 'documents');
+            if (r && r.length > 0) {
+                console.log('[MAINLIST] First doc:', r[0].id, r[0].name);
+            }
 
             await refreshFolders(filter);
             documents = new ObservableArray(
@@ -249,6 +255,7 @@
                     )
                 )
             );
+            console.log('[MAINLIST] documents array length:', documents.length);
             DEV_LOG &&
                 console.log(
                     'documents',
@@ -256,6 +263,7 @@
                 );
             updateNoDocument();
         } catch (error) {
+            console.error('[MAINLIST] refresh error:', error);
             showError(error);
         } finally {
             loading = false;

@@ -647,6 +647,8 @@ export class DocumentRepository extends BaseRepository<OCRDocument, Document> {
         return result;
     }
     async findDocuments({ filter, folder, omitThoseWithFolders = false, order = 'id DESC' }: { filter?: string; folder?: DocFolder; omitThoseWithFolders?: boolean; order?: string } = {}) {
+        console.log('[DOCS_SERVICE] findDocuments called, filter:', filter, 'folder:', folder, 'omitThoseWithFolders:', omitThoseWithFolders);
+        
         const args = {
             select: new SqlQuery([
                 `d.*,
@@ -687,7 +689,11 @@ LEFT JOIN
                 args.postfix = new SqlQuery((args.postfix ? [args.postfix] : []).concat([foldersPostfix]));
             }
         }
-        return this.search(args);
+        
+        console.log('[DOCS_SERVICE] Executing search with args');
+        const result = await this.search(args);
+        console.log('[DOCS_SERVICE] findDocuments result:', result?.length || 0, 'documents');
+        return result;
     }
     async createModelFromAttributes(attributes: Required<any> | OCRDocument): Promise<any> {
         const { extra, folders, id, pagesOrder, ...others } = attributes;
