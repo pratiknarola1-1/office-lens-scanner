@@ -9,13 +9,14 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
       
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -26,26 +27,45 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 'lts/*'
       
-      - name: Enable Corepack
-        run: corepack enable
-      
-      - name: Install NativeScript CLI
-        run: npm install -g nativescript
-      
-      - name: Set up Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
       
-      - name: Download native libraries (OpenCV + Tesseract)
+      - name: Enable Corepack
         run: |
-          # Download prebuilt native libraries from the original repo's dev_resources release
+          corepack enable
+          yarn config get globalFolder
+      
+      - name: Install NativeScript (Akylas fork)
+        run: |
+          npm i -g @akylas/nativescript-cli --ignore-scripts --legacy-peer-deps
+          ns package-manager set yarn2
+          ns usage-reporting disable
+          ns error-reporting disable
+      
+      - name: Download native libraries
+        run: |
           gh release download dev_resources --repo Akylas/OSS-DocumentScanner --pattern "android.zip" --dir .
           unzip -q android.zip
-          ls -la opencv/ tesseract/ 2>/dev/null || echo "Checking extracted structure..."
-          find . -name "libtesseract.a" -o -name "libopencv*.a" 2>/dev/null | head -10
+          ls -la opencv/ tesseract/ 2>/dev/null || echo "Checking structure..."
+          find . -maxdepth 3 -type d -name "opencv" -o -name "tesseract" 2>/dev/null
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Clean non-patch resolutions
+        run: |
+          node -e '
+            const fs = require("fs");
+            try {
+              const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+              if (pkg.resolutions) {
+                pkg.resolutions = Object.fromEntries(
+                  Object.entries(pkg.resolutions).filter(([_, v]) => typeof v === "string" && v.startsWith("patch:"))
+                );
+                fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2));
+              }
+            } catch(e) { console.log(e); }'
       
       - name: Install dependencies
         run: yarn install
@@ -61,7 +81,7 @@ jobs:
       - name: Build Android APK (debug)
         run: |
           source .env.ci
-          ns build android --debug --env.devlog 2>&1 | tee build.log || true
+          ns build android --debug --env.devlog 2>&1 | tee build.log
         continue-on-error: true
       
       - name: Check build output
