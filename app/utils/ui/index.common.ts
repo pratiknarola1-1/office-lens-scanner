@@ -652,16 +652,6 @@ export async function showPDFPopoverMenu({
                         break;
                     }
                     case 'export': {
-                        if (!exportDirectory) {
-                            if (await pickExportFolder()) {
-                                const item = options.getItem(0);
-                                item.subtitle = exportDirectoryName;
-                                options.setItem(0, item);
-                            } else {
-                                showSnack({ message: lc('please_choose_export_folder') });
-                                return;
-                            }
-                        }
                         await closePopover();
                         const component = (await import('~/components/common/ExportPDFAlertOptions.svelte')).default;
                         let componentInstanceInfo: ComponentInstanceInfo<GridLayout, ExportPDFAlertOptions__SvelteComponent_>;
@@ -724,16 +714,6 @@ export async function showPDFPopoverMenu({
                         break;
                     }
                     case 'bulk_export': {
-                        if (!exportDirectory) {
-                            if (await pickExportFolder()) {
-                                const item = options.getItem(0);
-                                item.subtitle = exportDirectoryName;
-                                options.setItem(0, item);
-                            } else {
-                                showSnack({ message: lc('please_choose_export_folder') });
-                                return;
-                            }
-                        }
                         await closePopover();
                         const component = (await import('~/components/common/ExportPDFAlertOptions.svelte')).default;
                         let componentInstanceInfo: ComponentInstanceInfo<GridLayout, ExportPDFAlertOptions__SvelteComponent_>;
@@ -1092,16 +1072,6 @@ export async function showImagePopoverMenu(pages: { page: OCRPage; document: OCR
                         }
                         case 'export':
                         case 'save_gallery': {
-                            if (!exportDirectory && item.id !== 'save_gallery') {
-                                if (await pickExportFolder()) {
-                                    const item = options.getItem(0);
-                                    item.subtitle = exportDirectoryName;
-                                    options.setItem(0, item);
-                                } else {
-                                    showSnack({ message: lc('please_choose_export_folder') });
-                                    return;
-                                }
-                            }
                             await closePopover();
                             await exportImages(pages, exportDirectory, item.id === 'save_gallery');
                             didDoSomething = true;
