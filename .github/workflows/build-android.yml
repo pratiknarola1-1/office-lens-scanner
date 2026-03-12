@@ -37,42 +37,21 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       
-      - name: Download OpenCV for Android
+      - name: Download native libraries (OpenCV + Tesseract)
         run: |
-          mkdir -p opencv/android
-          wget -q https://github.com/nihui/opencv-mobile/releases/latest/download/opencv-mobile-4.8.1-android.zip -O opencv-mobile.zip
-          unzip -q opencv-mobile.zip -d opencv-temp
-          # Copy the necessary libs/includes - adjust structure as needed
-          cp -r opencv-mobile-*/sdk/native/jni/* opencv/android/ 2>/dev/null || true
-          cp -r opencv-mobile-*/sdk/native/libs/* opencv/android/ 2>/dev/null || true
-          ls -la opencv/android/ || echo "OpenCV structure needs adjustment"
-      
-      - name: Download Tesseract for Android
-        run: |
-          mkdir -p tesseract/android
-          # Download prebuilt tesseract from the project's dev_resources
-          wget -q https://github.com/Akylas/OSS-DocumentScanner/releases/download/dev_resources/tesseract_android.tar.gz -O tesseract_android.tar.gz || echo "Tesseract download failed - will try alternative"
-          if [ -f tesseract_android.tar.gz ]; then
-            tar -xzf tesseract_android.tar.gz -C tesseract/android --strip-components=1
-          fi
-          ls -la tesseract/android/ || echo "Tesseract structure needs adjustment"
-      
-      - name: Download dev_resources
-        run: |
-          # Try to download the full dev_resources which includes opencv and tesseract
-          wget -q https://github.com/Akylas/OSS-DocumentScanner/releases/download/dev_resources/dev_resources.tar.gz -O dev_resources.tar.gz || echo "dev_resources download failed"
-          if [ -f dev_resources.tar.gz ]; then
-            tar -xzf dev_resources.tar.gz
-            ls -la opencv/ tesseract/ 2>/dev/null || true
-          fi
+          # Download prebuilt native libraries from the original repo's dev_resources release
+          gh release download dev_resources --repo Akylas/OSS-DocumentScanner --pattern "android.zip" --dir .
+          unzip -q android.zip
+          ls -la opencv/ tesseract/ 2>/dev/null || echo "Checking extracted structure..."
+          find . -name "libtesseract.a" -o -name "libopencv*.a" 2>/dev/null | head -10
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Install dependencies
         run: yarn install
       
-      - name: Create .env file
+      - name: Create environment file
         run: |
-          echo "source .env.ci" > .env
-          cat .env.ci || echo "No .env.ci found, creating minimal env"
           cat > .env.ci << 'EOF'
           export APP_ID=com.akylas.documentscanner
           export APP_BUILD_PATH=build/documentscanner
@@ -85,11 +64,13 @@ jobs:
           ns build android --debug --env.devlog 2>&1 | tee build.log || true
         continue-on-error: true
       
-      - name: List build output
+      - name: Check build output
         run: |
-          find platforms/android -name "*.apk" 2>/dev/null || echo "No APK found in platforms/android"
-          find . -name "*.apk" 2>/dev/null | head -5
-          cat build.log | tail -100
+          echo "=== Build log tail ==="
+          tail -100 build.log
+          echo "=== Searching for APK ==="
+          find platforms -name "*.apk" 2>/dev/null || echo "No APK in platforms/"
+          find . -name "*.apk" -not -path "./node_modules/*" 2>/dev/null | head -5
       
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
