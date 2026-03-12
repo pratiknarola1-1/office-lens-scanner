@@ -3,10 +3,71 @@
  * Office Lens-style: Auto-discover existing files in export directories on every app launch
  * and import them into the app's document database
  */
-import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path, Utils } from '@nativescript/core';
+import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path, Utils, Application } from '@nativescript/core';
 import { OCRDocument, PageData, getDocumentsService } from '~/models/OCRDocument';
 import { IMAGE_EXPORT_DIRECTORY, PDF_EXPORT_DIRECTORY, IMG_FORMAT, getImageExportSettings } from '~/utils/constants';
 import { getImageSize } from 'plugin-nativeprocessor';
+
+/**
+ * Check if we have permission to read external storage
+ */
+function hasStoragePermission(): boolean {
+    if (!__ANDROID__) return false;
+    
+    const context = Utils.android.getApplicationContext();
+    
+    // Android 11+ needs MANAGE_EXTERNAL_STORAGE for broad file access
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        return android.os.Environment.isExternalStorageManager();
+    }
+    
+    // Android 10 and below - check READ_EXTERNAL_STORAGE
+    if (context.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) === android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        return true;
+    }
+    
+    return false;
+}
+
+/**
+ * Request storage permission
+ */
+async function requestStoragePermission(): Promise<boolean> {
+    if (!__ANDROID__) return false;
+    
+    const context = Utils.android.getApplicationContext();
+    const activity = Application.android.foregroundActivity || Application.android.startActivity;
+    
+    // Android 11+ needs MANAGE_EXTERNAL_STORAGE
+    if (android.os.Build.VERSION.SDK_INT >= 30) {
+        if (!android.os.Environment.isExternalStorageManager()) {
+            try {
+                const intent = new android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+                intent.setData(android.net.Uri.parse('package:' + context.getPackageName()));
+                activity.startActivity(intent);
+                return false; // Need to wait for user to grant permission
+            } catch (e) {
+                // Fallback to generic settings
+                const intent = new android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+                activity.startActivity(intent);
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    // Android 10 and below
+    return new Promise((resolve) => {
+        const REQUEST_CODE = 1234;
+        activity.requestPermissions(
+            [android.Manifest.permission.READ_EXTERNAL_STORAGE],
+            REQUEST_CODE
+        );
+        // Note: This is async, we'd need to handle the result
+        // For now, return false and let next launch try again
+        resolve(false);
+    });
+}
 
 /**
  * Get the PDF export directory path
@@ -38,43 +99,6 @@ export function getImageExportDirectory(): string | null {
         console.log('Error getting Image directory:', e);
     }
     return null;
-}
-
-/**
- * Ensures export directories exist
- */
-export async function ensureExportDirectories(): Promise<void> {
-    if (!__ANDROID__) return;
-
-    try {
-        const pdfDir = getPdfExportDirectory();
-        const imageDir = getImageExportDirectory();
-        
-        console.log('ensureExportDirectories - PDF:', pdfDir);
-        console.log('ensureExportDirectories - Image:', imageDir);
-
-        // Create PDF export directory
-        if (pdfDir) {
-            try {
-                const pdfFolder = Folder.fromPath(pdfDir);
-                console.log('PDF folder path:', pdfFolder.path);
-            } catch (e) {
-                console.log('PDF folder does not exist, creating...');
-            }
-        }
-
-        // Create Image export directory
-        if (imageDir) {
-            try {
-                const imageFolder = Folder.fromPath(imageDir);
-                console.log('Image folder path:', imageFolder.path);
-            } catch (e) {
-                console.log('Image folder does not exist, creating...');
-            }
-        }
-    } catch (error) {
-        console.log('Error creating export directories:', error);
-    }
 }
 
 /**
@@ -182,7 +206,7 @@ async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null>
 }
 
 /**
- * List files in a directory using Java File API (more reliable on Android)
+ * List files in a directory using Java File API
  */
 function listFilesInDirectory(dirPath: string): string[] {
     const files: string[] = [];
@@ -190,23 +214,24 @@ function listFilesInDirectory(dirPath: string): string[] {
         console.log('Listing files in:', dirPath);
         const javaFile = new java.io.File(dirPath);
         
-        if (!javaFile.exists()) {
-            console.log('Directory does not exist:', dirPath);
-            return files;
-        }
+        console.log('Directory exists:', javaFile.exists());
+        console.log('Is directory:', javaFile.isDirectory());
+        console.log('Can read:', javaFile.canRead());
         
-        if (!javaFile.isDirectory()) {
-            console.log('Path is not a directory:', dirPath);
+        if (!javaFile.exists() || !javaFile.isDirectory()) {
             return files;
         }
         
         const children = javaFile.listFiles();
+        console.log('listFiles result:', children ? 'not null' : 'null');
+        
         if (children) {
+            console.log('Number of children:', children.length);
             for (let i = 0; i < children.length; i++) {
                 const child = children[i];
+                console.log('Child:', child.getName(), 'isFile:', child.isFile(), 'isDir:', child.isDirectory());
                 if (child.isFile()) {
                     files.push(child.getAbsolutePath());
-                    console.log('Found file:', child.getAbsolutePath());
                 }
             }
         }
@@ -227,6 +252,22 @@ export async function discoverExistingFiles(): Promise<number> {
     }
 
     console.log('=== Starting file discovery ===');
+    
+    // Check storage permission first
+    const hasPermission = hasStoragePermission();
+    console.log('Has storage permission:', hasPermission);
+    
+    if (!hasPermission) {
+        console.log('Requesting storage permission...');
+        const granted = await requestStoragePermission();
+        console.log('Permission granted:', granted);
+        if (!granted) {
+            console.log('Storage permission not granted, cannot discover files');
+            console.log('Please grant "Allow all the time" or "Allow access to manage all files" permission');
+            return 0;
+        }
+    }
+
     let importedCount = 0;
 
     try {
@@ -236,13 +277,6 @@ export async function discoverExistingFiles(): Promise<number> {
         
         console.log('PDF directory:', pdfDir);
         console.log('Image directory:', imageDir);
-
-        // Check storage permissions
-        const context = Utils.android.getApplicationContext();
-        if (__ANDROID__ && android.os.Build.VERSION.SDK_INT >= 30) {
-            // Android 11+ needs MANAGE_EXTERNAL_STORAGE for broad access
-            console.log('Android 11+ - checking storage permissions');
-        }
 
         // Process PDFs
         if (pdfDir) {
