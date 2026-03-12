@@ -5,8 +5,8 @@
  */
 import { ApplicationSettings, File, Folder, ImageSource, knownFolders, path, Utils, Application } from '@nativescript/core';
 import { OCRDocument, PageData, getDocumentsService } from '~/models/OCRDocument';
-import { IMAGE_EXPORT_DIRECTORY, PDF_EXPORT_DIRECTORY, IMG_FORMAT, getImageExportSettings } from '~/utils/constants';
-import { getImageSize } from 'plugin-nativeprocessor';
+import { IMAGE_EXPORT_DIRECTORY, PDF_EXPORT_DIRECTORY, IMG_FORMAT, getImageExportSettings, PDFImportImages } from '~/utils/constants';
+import { getImageSize, importPdfToTempImages } from 'plugin-nativeprocessor';
 
 /**
  * Check if we have permission to read external storage
@@ -63,8 +63,6 @@ async function requestStoragePermission(): Promise<boolean> {
             [android.Manifest.permission.READ_EXTERNAL_STORAGE],
             REQUEST_CODE
         );
-        // Note: This is async, we'd need to handle the result
-        // For now, return false and let next launch try again
         resolve(false);
     });
 }
@@ -146,6 +144,7 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
         
         console.log('Image size:', imageSize.width, 'x', imageSize.height, 'rotation:', imageSize.rotation);
         
+        // Create page data with proper dimensions
         const pageData: PageData = {
             imagePath: imagePath,
             sourceImagePath: imagePath,
@@ -155,6 +154,7 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
             sourceImageWidth: imageSize.width,
             sourceImageHeight: imageSize.height,
             sourceImageRotation: imageSize.rotation || 0,
+            // Set a full-page crop (the whole image)
             crop: [
                 [0, 0],
                 [imageSize.width, 0],
@@ -177,6 +177,7 @@ async function importImageAsDocument(imagePath: string): Promise<OCRDocument | n
 
 /**
  * Import a PDF file as a new document
+ * Converts PDF pages to images like the normal import flow
  */
 async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null> {
     try {
@@ -189,15 +190,69 @@ async function importPdfAsDocument(pdfPath: string): Promise<OCRDocument | null>
         
         const fileName = pdfPath.split('/').pop() || 'Imported PDF';
         
-        const doc = await OCRDocument.createDocument([], undefined, {
-            name: fileName.replace(/\.[^/.]+$/, ''),
-            extra: {
-                importedPdfPath: pdfPath,
-                importedType: 'pdf'
-            }
+        // Convert PDF to images
+        console.log('Converting PDF to images:', pdfPath);
+        const pdfImages = await importPdfToTempImages(pdfPath, {
+            importPDFImages: true,
+            compressFormat: 'png',
+            compressQuality: 90
         });
         
-        console.log('Created document from PDF:', doc.id, doc.name);
+        console.log('PDF converted to images:', pdfImages);
+        
+        if (!pdfImages || pdfImages.length === 0) {
+            console.log('No images extracted from PDF, creating reference document');
+            // Fallback: create a document with metadata reference to the PDF
+            // This document won't show pages but will store the PDF path
+            const doc = await OCRDocument.createDocument([], undefined, {
+                name: fileName.replace(/\.[^/.]+$/, ''),
+                extra: {
+                    importedPdfPath: pdfPath,
+                    importedType: 'pdf'
+                }
+            });
+            return doc;
+        }
+        
+        // Create pages from the extracted images
+        const pagesData: PageData[] = [];
+        for (let i = 0; i < pdfImages.length; i++) {
+            const imagePath = pdfImages[i];
+            try {
+                const imageSize = await getImageSize(imagePath);
+                console.log('PDF page', i, 'size:', imageSize.width, 'x', imageSize.height);
+                
+                pagesData.push({
+                    imagePath: imagePath,
+                    sourceImagePath: imagePath,
+                    width: imageSize.width,
+                    height: imageSize.height,
+                    rotation: imageSize.rotation || 0,
+                    sourceImageWidth: imageSize.width,
+                    sourceImageHeight: imageSize.height,
+                    sourceImageRotation: imageSize.rotation || 0,
+                    crop: [
+                        [0, 0],
+                        [imageSize.width, 0],
+                        [imageSize.width, imageSize.height],
+                        [0, imageSize.height]
+                    ]
+                });
+            } catch (e) {
+                console.error('Error processing PDF page image:', imagePath, e);
+            }
+        }
+        
+        if (pagesData.length === 0) {
+            console.log('No valid pages created from PDF');
+            return null;
+        }
+        
+        const doc = await OCRDocument.createDocument(pagesData, undefined, {
+            name: fileName.replace(/\.[^/.]+$/, '')
+        });
+        
+        console.log('Created document from PDF:', doc.id, doc.name, 'with', pagesData.length, 'pages');
         return doc;
     } catch (error) {
         console.error('Error importing PDF:', pdfPath, error);
@@ -263,7 +318,6 @@ export async function discoverExistingFiles(): Promise<number> {
         console.log('Permission granted:', granted);
         if (!granted) {
             console.log('Storage permission not granted, cannot discover files');
-            console.log('Please grant "Allow all the time" or "Allow access to manage all files" permission');
             return 0;
         }
     }
@@ -278,23 +332,7 @@ export async function discoverExistingFiles(): Promise<number> {
         console.log('PDF directory:', pdfDir);
         console.log('Image directory:', imageDir);
 
-        // Process PDFs
-        if (pdfDir) {
-            console.log('--- Scanning PDF directory ---');
-            const pdfFiles = listFilesInDirectory(pdfDir);
-            
-            for (const pdfPath of pdfFiles) {
-                if (pdfPath.toLowerCase().endsWith('.pdf')) {
-                    console.log('Processing PDF:', pdfPath);
-                    const doc = await importPdfAsDocument(pdfPath);
-                    if (doc) {
-                        importedCount++;
-                    }
-                }
-            }
-        }
-
-        // Process Images
+        // Process Images first (they're simpler)
         if (imageDir) {
             console.log('--- Scanning Image directory ---');
             const imageFiles = listFilesInDirectory(imageDir);
@@ -304,6 +342,22 @@ export async function discoverExistingFiles(): Promise<number> {
                 if (ext.endsWith('.jpg') || ext.endsWith('.jpeg') || ext.endsWith('.png') || ext.endsWith('.webp')) {
                     console.log('Processing Image:', imagePath);
                     const doc = await importImageAsDocument(imagePath);
+                    if (doc) {
+                        importedCount++;
+                    }
+                }
+            }
+        }
+
+        // Process PDFs (convert to images)
+        if (pdfDir) {
+            console.log('--- Scanning PDF directory ---');
+            const pdfFiles = listFilesInDirectory(pdfDir);
+            
+            for (const pdfPath of pdfFiles) {
+                if (pdfPath.toLowerCase().endsWith('.pdf')) {
+                    console.log('Processing PDF:', pdfPath);
+                    const doc = await importPdfAsDocument(pdfPath);
                     if (doc) {
                         importedCount++;
                     }
