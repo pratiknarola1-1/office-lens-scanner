@@ -454,6 +454,7 @@
         documentsService.on(EVENT_DOCUMENT_MOVED_FOLDER, onDocumentMovedFolder);
         documentsService.on(EVENT_FOLDER_ADDED, onFolderAdded);
         documentsService.on(EVENT_FOLDER_UPDATED, onFolderUpdated);
+        documentsService.on('documentsImported', refreshSimple); // Office Lens-style: refresh after file discovery
         syncService.on(EVENT_SYNC_STATE, onSyncState);
         syncService.on(EVENT_STATE, refreshSimple);
     });
@@ -472,6 +473,7 @@
         documentsService.off(EVENT_DOCUMENT_MOVED_FOLDER, onDocumentMovedFolder);
         documentsService.off(EVENT_FOLDER_ADDED, onFolderAdded);
         documentsService.off(EVENT_FOLDER_UPDATED, onFolderUpdated);
+        documentsService.off('documentsImported', refreshSimple);
         syncService.off(EVENT_SYNC_STATE, onSyncState);
         syncService.off(EVENT_STATE, refreshSimple);
     });

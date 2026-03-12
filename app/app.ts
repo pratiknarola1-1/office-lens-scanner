@@ -144,11 +144,18 @@ try {
             Application.notify({ eventName: 'servicesStarted' });
             
             // Office Lens-style: Discover existing files on every launch
-            // Run AFTER services are started so UI is ready to receive notifications
             if (__ANDROID__) {
                 try {
                     const imported = await startFileDiscovery();
                     console.log('File discovery imported:', imported, 'files');
+                    
+                    // Force UI refresh if documents were imported
+                    if (imported > 0) {
+                        // Small delay to ensure database is synced
+                        setTimeout(() => {
+                            documentsService.notify({ eventName: 'documentsImported', count: imported });
+                        }, 100);
+                    }
                 } catch (e) {
                     console.log('File discovery error:', e);
                 }
@@ -165,13 +172,13 @@ try {
         // DEV_LOG && console.log('launch');
         startThemeHelper();
         launched = true;
-        start();
+        await start();
     });
-    Application.on(Application.resumeEvent, () => {
+    Application.on(Application.resumeEvent, async () => {
         if (!launched) {
             // DEV_LOG && console.log('resume');
             launched = true;
-            start();
+            await start();
         }
     });
     let pageInstance;
