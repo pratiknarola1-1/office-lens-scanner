@@ -28,6 +28,7 @@ import { securityService } from '~/services/security';
 import { syncService } from '~/services/sync';
 import ZoomOutTransformer from '~/transformers/ZoomOutTransformer';
 import { SETTINGS_APP_VERSION, SETTINGS_SYNC_ON_START } from '~/utils/constants';
+import { startFileDiscovery } from '~/services/fileDiscovery';
 import { startOnCam } from './variables';
 import { CollectionViewTraceCategory } from '@nativescript-community/ui-collectionview';
 import { init as sharedInit } from '@shared/index';
@@ -137,6 +138,12 @@ try {
             // DEV_LOG && console.log('start');
             setDocumentsService(documentsService);
             await Promise.all([networkService.start(), securityService.start(), syncService.start(), ocrService.start(getCurrentISO3Language()), documentsService.start()]);
+            
+            // Office Lens-style: Discover existing files on fresh install
+            if (__ANDROID__) {
+                startFileDiscovery().catch(e => DEV_LOG && console.log('File discovery error:', e));
+            }
+            
             Application.servicesStarted = true;
             // DEV_LOG && console.log('servicesStarted');
             Application.notify({ eventName: 'servicesStarted' });

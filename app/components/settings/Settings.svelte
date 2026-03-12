@@ -362,35 +362,10 @@
                 ];
             }
             case 'pdf_export':
+                // Office Lens-style: Export folder is fixed, no user choice
                 return (
                     (__ANDROID__
                         ? [
-                              {
-                                  type: 'rightIcon',
-                                  key: 'pdf_export_directory',
-                                  title: lc('export_folder'),
-                                  defaultValue: DEFAULT_EXPORT_DIRECTORY || lc('please_choose_export_folder'),
-                                  description: (item) => ApplicationSettings.getString(item.key, item.defaultValue),
-                                  rightBtnIcon: 'mdi-restore',
-                                  onTap: async (item) => {
-                                      DEV_LOG && console.log('onTap', item);
-                                      const result = await pickFolder({
-                                          multipleSelection: false,
-                                          forceSAF: true,
-                                          permissions: { write: true, persistable: true, read: true }
-                                      });
-                                      if (result.folders.length) {
-                                          const exportDirectory = result.folders[0];
-                                          ApplicationSettings.setString(item.key, exportDirectory);
-                                          return true;
-                                      }
-                                  },
-                                  onRightIconTap: (item) => {
-                                      DEV_LOG && console.log('onRightIconTap', item);
-                                      ApplicationSettings.remove(item.key);
-                                      return true;
-                                  }
-                              },
                               {
                                   type: 'sectionheader',
                                   title: lc('page_layout')

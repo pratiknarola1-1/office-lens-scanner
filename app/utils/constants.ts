@@ -118,11 +118,17 @@ export const IMAGE_CONTEXT_OPTIONS = {
     }
 };
 export const DEFAULT_PDF_OPTIONS_STRING = JSON.stringify(DEFAULT_PDF_OPTIONS);
-export const DEFAULT_EXPORT_DIRECTORY = __ANDROID__
-    ? SDK_VERSION < 30
-        ? android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS).getAbsolutePath()
-        : undefined
+// Office Lens-style: Fixed export directories
+export const PDF_EXPORT_DIRECTORY = __ANDROID__
+    ? android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOCUMENTS).getAbsolutePath() + '/DocumentScanner'
     : undefined;
+
+export const IMAGE_EXPORT_DIRECTORY = __ANDROID__
+    ? android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES).getAbsolutePath() + '/DocumentScanner'
+    : undefined;
+
+// Keep for backwards compatibility but point to new location
+export const DEFAULT_EXPORT_DIRECTORY = PDF_EXPORT_DIRECTORY;
 
 export function getImageExportSettings() {
     return {

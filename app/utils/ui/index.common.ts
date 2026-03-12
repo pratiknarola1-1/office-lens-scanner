@@ -14,6 +14,7 @@ import {
     ApplicationSettings,
     Color,
     File,
+    Folder,
     GridLayout,
     ImageSource,
     ObservableArray,
@@ -76,7 +77,9 @@ import {
     DOCUMENT_NOT_DETECTED_MARGIN,
     IMG_COMPRESS,
     IMG_FORMAT,
+    IMAGE_EXPORT_DIRECTORY,
     PDFImportImages,
+    PDF_EXPORT_DIRECTORY,
     PDF_EXT,
     PDF_IMPORT_IMAGES,
     PKPASS_EXT,
@@ -572,89 +575,37 @@ export async function showPDFPopoverMenu({
     anchor?;
     popoverOptions?: Partial<PopoverOptions>;
 }) {
-    let exportDirectory: string;
+    // Office Lens-style: Fixed export directory, no user choice
+    const exportDirectory: string = PDF_EXPORT_DIRECTORY;
 
-    // on IOS we dont persist the export folder
-    // if (__IOS__) {
-    //     const bookmark = NSUserDefaults.standardUserDefaults.objectForKey('pdf_export_directory');
-    //     const stale = new interop.Reference(false);
-    //     const resolvedURL = NSURL.URLByResolvingBookmarkDataOptionsRelativeToURLBookmarkDataIsStaleError(bookmark, NSURLBookmarkResolutionOptions.WithSecurityScope, null, stale);
-    //     exportDirectory =
-    // } else {
-    exportDirectory = ApplicationSettings.getString('pdf_export_directory', DEFAULT_EXPORT_DIRECTORY);
-    // }
-    let exportDirectoryName = exportDirectory;
-    function updateDirectoryName() {
-        exportDirectoryName = exportDirectory ? getDirectoryName(exportDirectory) : lc('please_choose_export_folder');
-    }
-    updateDirectoryName();
-
-    async function pickExportFolder() {
-        const result = await pickFolder({
-            multipleSelection: false,
-            permissions: { write: true, persistable: true, read: true },
-            forceSAF: true
-        });
-        if (result?.folders?.length) {
-            exportDirectory = result.folders[0];
-            DEV_LOG && console.log('set_export_directory', exportDirectory);
-            // ApplicationSettings.setString('pdf_export_directory', exportDirectory);
-            if (__IOS__) {
-                const bookmark = NSURL.fileURLWithPathIsDirectory(result.folders[0], true).bookmarkDataWithOptionsIncludingResourceValuesForKeysRelativeToURLError(
-                    NSURLBookmarkCreationOptions.WithSecurityScope,
-                    null,
-                    null
-                );
-                NSUserDefaults.standardUserDefaults.setObjectForKey(bookmark, 'pdf_export_directory');
-            } else {
-                ApplicationSettings.setString('pdf_export_directory', exportDirectory);
+    // Ensure the export directory exists
+    if (__ANDROID__ && exportDirectory) {
+        const folder = Folder.fromPath(exportDirectory);
+        if (!File.exists(exportDirectory)) {
+            try {
+                folder.create();
+            } catch (e) {
+                DEV_LOG && console.log('Could not create PDF export directory', e);
             }
-            updateDirectoryName();
-            return true;
         }
-        return false;
     }
 
-    const options = new ObservableArray(
-        (__ANDROID__ ? [{ id: 'set_export_directory', name: lc('export_folder'), subtitle: exportDirectoryName, rightIcon: 'mdi-restore' }] : [])
-            .concat([
-                { id: 'settings', name: lc('pdf_export_settings'), icon: 'mdi-cog' },
-                { id: 'open', name: lc('open'), icon: 'mdi-eye' },
-                { id: 'share', name: lc('share'), icon: 'mdi-share-variant' },
-                { id: 'export', name: lc('export'), icon: 'mdi-export' },
-                ...(documents.length > 1 ? [{ id: 'bulk_export', name: lc('bulk_export'), icon: 'mdi-file-document-multiple-outline' }] : [])
-            ] as any)
-            .concat(__ANDROID__ ? ([{ id: 'print', name: lc('print'), icon: 'mdi-printer' }] as any) : [])
-            .concat([{ id: 'preview', name: lc('preview'), icon: 'mdi-printer-eye' }] as any)
-    );
+    const options = new ObservableArray([
+        { id: 'settings', name: lc('pdf_export_settings'), icon: 'mdi-cog' },
+        { id: 'open', name: lc('open'), icon: 'mdi-eye' },
+        { id: 'share', name: lc('share'), icon: 'mdi-share-variant' },
+        { id: 'export', name: lc('export'), icon: 'mdi-export' },
+        ...(documents.length > 1 ? [{ id: 'bulk_export', name: lc('bulk_export'), icon: 'mdi-file-document-multiple-outline' }] : [])
+    ] as any)
+        .concat(__ANDROID__ ? ([{ id: 'print', name: lc('print'), icon: 'mdi-printer' }] as any) : [])
+        .concat([{ id: 'preview', name: lc('preview'), icon: 'mdi-printer-eye' }] as any);
     return showPopoverMenu({
         title: lc('pdf_export'),
         options,
         anchor,
         vertPos: VerticalPosition.BELOW,
         props: {
-            width: 250,
-            // rows: 'auto',
-            // rowHeight: null,
-            // height: null,
-            // autoSizeListItem: true,
-            onRightIconTap: (item, event) => {
-                try {
-                    switch (item.id) {
-                        case 'set_export_directory': {
-                            ApplicationSettings.remove('pdf_export_directory');
-                            exportDirectory = DEFAULT_EXPORT_DIRECTORY;
-                            updateDirectoryName();
-                            const item = options.getItem(0);
-                            item.subtitle = exportDirectoryName;
-                            options.setItem(0, item);
-                            break;
-                        }
-                    }
-                } catch (error) {
-                    showError(error);
-                }
-            }
+            width: 250
         },
 
         closeOnClose: false,
@@ -667,14 +618,6 @@ export async function showPDFPopoverMenu({
                         showSettings({
                             subSettingsOptions: 'pdf_export'
                         });
-                        break;
-                    }
-                    case 'set_export_directory': {
-                        if (await pickExportFolder()) {
-                            const item = options.getItem(0);
-                            item.subtitle = exportDirectoryName;
-                            options.setItem(0, item);
-                        }
                         break;
                     }
                     case 'print': {
@@ -986,44 +929,27 @@ export function getDirectoryName(folderPath: string) {
 }
 
 export async function showImagePopoverMenu(pages: { page: OCRPage; document: OCRDocument }[], anchor, popoverOptions?: Partial<PopoverOptions>) {
-    let exportDirectory = ApplicationSettings.getString('image_export_directory', DEFAULT_EXPORT_DIRECTORY);
-    let exportDirectoryName = exportDirectory;
-    DEV_LOG && console.log('showImagePopoverMenu', exportDirectoryName, pages.length);
-    function updateDirectoryName() {
-        exportDirectoryName = exportDirectory ? getDirectoryName(exportDirectory) : lc('please_choose_export_folder');
-    }
-    updateDirectoryName();
-    async function pickExportFolder() {
-        const result = await pickFolder({
-            multipleSelection: false,
-            permissions: { write: true, persistable: true, read: true },
-            forceSAF: true
-        });
-        if (result.folders?.[0]) {
-            exportDirectory = result.folders[0];
-            if (__IOS__) {
-                const bookmark = NSURL.fileURLWithPathIsDirectory(exportDirectory, true).bookmarkDataWithOptionsIncludingResourceValuesForKeysRelativeToURLError(
-                    NSURLBookmarkCreationOptions.WithSecurityScope,
-                    null,
-                    null
-                );
-                NSUserDefaults.standardUserDefaults.setObjectForKey(bookmark, 'image_export_directory');
-            } else {
-                ApplicationSettings.setString('image_export_directory', exportDirectory);
+    // Office Lens-style: Fixed export directory, no user choice
+    const exportDirectory: string = IMAGE_EXPORT_DIRECTORY;
+    DEV_LOG && console.log('showImagePopoverMenu', exportDirectory, pages.length);
+
+    // Ensure the export directory exists
+    if (__ANDROID__ && exportDirectory) {
+        const folder = Folder.fromPath(exportDirectory);
+        if (!File.exists(exportDirectory)) {
+            try {
+                folder.create();
+            } catch (e) {
+                DEV_LOG && console.log('Could not create image export directory', e);
             }
-            updateDirectoryName();
-            return true;
         }
-        return false;
     }
 
-    const options = new ObservableArray(
-        (__ANDROID__ ? [{ id: 'set_export_directory', name: lc('export_folder'), subtitle: exportDirectoryName, rightIcon: 'mdi-restore' }] : []).concat([
-            { id: 'export', name: lc('export'), icon: 'mdi-export' },
-            { id: 'save_gallery', name: lc('save_gallery'), icon: 'mdi-image-multiple' },
-            { id: 'share', name: lc('share'), icon: 'mdi-share-variant' }
-        ] as any)
-    );
+    const options = new ObservableArray([
+        { id: 'export', name: lc('export'), icon: 'mdi-export' },
+        { id: 'save_gallery', name: lc('save_gallery'), icon: 'mdi-image-multiple' },
+        { id: 'share', name: lc('share'), icon: 'mdi-share-variant' }
+    ] as any);
     if (CARD_APP && pages.some((p) => p.page.pkpass)) {
         options.splice(options.length - 2, 0, {
             id: 'export_pkpass',
@@ -1043,28 +969,7 @@ export async function showImagePopoverMenu(pages: { page: OCRPage; document: OCR
             anchor,
             vertPos: VerticalPosition.BELOW,
             props: {
-                width: 250,
-                // rows: 'auto',
-                // rowHeight: null,
-                // height: null,
-                // autoSizeListItem: true,
-                onRightIconTap: (item, event) => {
-                    try {
-                        switch (item.id) {
-                            case 'set_export_directory': {
-                                ApplicationSettings.remove('image_export_directory');
-                                exportDirectory = DEFAULT_EXPORT_DIRECTORY;
-                                updateDirectoryName();
-                                const item = options.getItem(0);
-                                item.subtitle = exportDirectoryName;
-                                options.setItem(0, item);
-                                break;
-                            }
-                        }
-                    } catch (error) {
-                        reject(error);
-                    }
-                }
+                width: 250
             },
 
             closeOnClose: false,
@@ -1073,15 +978,6 @@ export async function showImagePopoverMenu(pages: { page: OCRPage; document: OCR
                 try {
                     let didDoSomething = false;
                     switch (item.id) {
-                        case 'set_export_directory': {
-                            if (await pickExportFolder()) {
-                                const item = options.getItem(0);
-                                item.subtitle = exportDirectoryName;
-                                options.setItem(0, item);
-                                didDoSomething = true;
-                            }
-                            break;
-                        }
                         case 'share':
                             await closePopover();
                             const images = [];
