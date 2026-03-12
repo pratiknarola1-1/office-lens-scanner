@@ -139,14 +139,21 @@ try {
             setDocumentsService(documentsService);
             await Promise.all([networkService.start(), securityService.start(), syncService.start(), ocrService.start(getCurrentISO3Language()), documentsService.start()]);
             
-            // Office Lens-style: Discover existing files on fresh install
-            if (__ANDROID__) {
-                startFileDiscovery().catch(e => DEV_LOG && console.log('File discovery error:', e));
-            }
-            
             Application.servicesStarted = true;
             // DEV_LOG && console.log('servicesStarted');
             Application.notify({ eventName: 'servicesStarted' });
+            
+            // Office Lens-style: Discover existing files on every launch
+            // Run AFTER services are started so UI is ready to receive notifications
+            if (__ANDROID__) {
+                try {
+                    const imported = await startFileDiscovery();
+                    console.log('File discovery imported:', imported, 'files');
+                } catch (e) {
+                    console.log('File discovery error:', e);
+                }
+            }
+            
             if (ApplicationSettings.getBoolean(SETTINGS_SYNC_ON_START, false)) {
                 syncService.syncDocuments({ withFolders: true });
             }
